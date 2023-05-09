@@ -1,0 +1,100 @@
+using System.Collections.Generic;
+using System.IdentityModel.Tokens.Jwt;
+using Amazon.Lambda.Core;
+using Amazon.Lambda.APIGatewayEvents;
+using Microsoft.IdentityModel.Tokens;
+using System.Security.Claims;
+
+public class AuthPolicy
+{
+    public string principalId { get; set; }
+    public PolicyDocument policyDocument { get; set; }
+}
+
+public class PolicyDocument
+{
+    public string Version { get; set; }
+    public Statement[] Statement { get; set; }
+}
+
+public class Statement
+{
+    public string Action { get; set; }
+    public string Effect { get; set; }
+    public string Resource { get; set; }
+}
+
+public class Function
+{
+    private const string issuer = "https://login.microsoftonline.com/{YOUR_TENANT_ID}/v2.0";
+    private const string audience = "{YOUR_APP_ID_URI}";
+
+    public AuthPolicy Authorize(APIGatewayCustomAuthorizerRequest apiRequest, ILambdaContext context)
+    {
+        var authPolicy = new AuthPolicy();
+        authPolicy.policyDocument = new PolicyDocument();
+        authPolicy.policyDocument.Version = "2012-10-17";
+        authPolicy.policyDocument.Statement = new Statement[1];
+
+        var token = apiRequest.AuthorizationToken;
+
+        if (string.IsNullOrEmpty(token))
+        {
+            context.Logger.LogLine("Authorization token is missing");
+            authPolicy.policyDocument.Statement[0] = new Statement
+            {
+                Action = "execute-api:Invoke",
+                Effect = "Deny",
+                Resource = apiRequest.MethodArn
+            };
+            return authPolicy;
+        }
+
+        var tokenHandler = new JwtSecurityTokenHandler();
+        var validationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidIssuer = issuer,
+            ValidateAudience = true,
+            ValidAudience = audience,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKeys = GetSigningKeys(),
+            ValidateLifetime = true
+        };
+
+        try
+        {
+            SecurityToken securityToken;
+            var claimsPrincipal = tokenHandler.ValidateToken(token, validationParameters, out securityToken);
+
+            authPolicy.principalId = claimsPrincipal.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            authPolicy.policyDocument.Statement[0] = new Statement
+            {
+                Action = "execute-api:Invoke",
+                Effect = "Allow",
+                Resource = apiRequest.MethodArn
+            };
+
+            return authPolicy;
+        }
+        catch (SecurityTokenException ex)
+        {
+            context.Logger.LogLine($"Failed to validate the token: {ex.Message}");
+            authPolicy.policyDocument.Statement[0] = new Statement
+            {
+                Action = "execute-api:Invoke",
+                Effect = "Deny",
+                Resource = apiRequest.MethodArn
+            };
+            return authPolicy;
+        }
+    }
+
+    private IEnumerable<SecurityKey> GetSigningKeys()
+    {
+        // Replace with your Azure AD app's signing keys
+        var signingKey = "YOUR_SIGNING_KEY_HERE";
+
+        return new List<SecurityKey> { new SymmetricSecurityKey(System.Text.Encoding.UTF8.GetBytes(signingKey)) };
+    }
+}
