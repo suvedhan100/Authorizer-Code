@@ -1,0 +1,56 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Graph;
+using Microsoft.Graph.Auth;
+using Microsoft.Identity.Client;
+using System;
+
+public static class GraphServiceConfiguration
+{
+    public static void Configure(IServiceCollection services, string clientId, string clientSecret)
+    {
+        services.AddSingleton<IGraphServiceClient>(provider =>
+        {
+            IConfidentialClientApplication confidentialClientApplication = ConfidentialClientApplicationBuilder
+                .Create(clientId)
+                .WithClientSecret(clientSecret)
+                .WithAuthority(new Uri("https://login.microsoftonline.com/your-tenant-id"))
+                .Build();
+
+            ClientCredentialProvider authProvider = new ClientCredentialProvider(confidentialClientApplication);
+            return new GraphServiceClient(authProvider);
+        });
+    }
+}
+
+
+using Microsoft.Extensions.DependencyInjection;
+
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        // Add other service configurations...
+
+        string clientId = "your-client-id";
+        string clientSecret = "your-client-secret";
+        GraphServiceConfiguration.Configure(services, clientId, clientSecret);
+    }
+    
+    // Configure method and other code...
+}
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Graph;
+
+public class MyController : ControllerBase
+{
+    private readonly IGraphServiceClient _graphServiceClient;
+
+    public MyController(IGraphServiceClient graphServiceClient)
+    {
+        _graphServiceClient = graphServiceClient;
+    }
+
+    // Use the _graphServiceClient instance in your controller actions...
+}
+
+
