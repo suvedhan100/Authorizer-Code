@@ -1,0 +1,109 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using Amazon.Lambda.APIGatewayEvents;
+using Amazon.Lambda.Core;
+using Microsoft.Graph;
+using Microsoft.Identity.Client;
+
+[assembly:LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
+
+namespace AWSAuthorizerLambda
+{
+    public class Function
+    {
+        private static string clientId = "<your-client-id>";
+        private static string clientSecret = "<your-client-secret>";
+        private static string tenantId = "<your-tenant-id>";
+        
+        private static IConfidentialClientApplication clientApp;
+        
+        static Function()
+        {
+            clientApp = ConfidentialClientApplicationBuilder
+                .Create(clientId)
+                .WithClientSecret(clientSecret)
+                .WithAuthority($"https://login.microsoftonline.com/{tenantId}")
+                .Build();
+        }
+        
+        public async Task<APIGatewayCustomAuthorizerResponse> FunctionHandler(APIGatewayCustomAuthorizerRequest request, ILambdaContext context)
+        {
+            var token = request.AuthorizationToken;
+            if (string.IsNullOrEmpty(token))
+                return GenerateUnauthorizedResponse();
+            
+            var graphServiceClient = GetGraphServiceClient(token);
+            if (graphServiceClient == null)
+                return GenerateUnauthorizedResponse();
+            
+            var user = await graphServiceClient.Me.Request().GetAsync();
+            if (user == null)
+                return GenerateUnauthorizedResponse();
+            
+            var policy = new APIGatewayCustomAuthorizerPolicy
+            {
+                Version = "2012-10-17",
+                Statement = new List<APIGatewayCustomAuthorizerPolicy.IAMPolicyStatement>
+                {
+                    new APIGatewayCustomAuthorizerPolicy.IAMPolicyStatement
+                    {
+                        Action = new HashSet<string> { "execute-api:Invoke" },
+                        Effect = "Allow",
+                        Resource = new HashSet<string> { request.MethodArn }
+                    }
+                }
+            };
+            
+            var response = new APIGatewayCustomAuthorizerResponse
+            {
+                PrincipalID = user.Id,
+                PolicyDocument = policy,
+                Context = new Dictionary<string, string>
+                {
+                    { "userId", user.Id },
+                    { "email", user.Mail }
+                }
+            };
+            
+            return response;
+        }
+        
+        private GraphServiceClient GetGraphServiceClient(string token)
+        {
+            var authResult = clientApp.AcquireTokenOnBehalfOf(new[] { "https://graph.microsoft.com/.default" }, new UserAssertion(token)).ExecuteAsync().GetAwaiter().GetResult();
+            
+            if (authResult != null && !string.IsNullOrEmpty(authResult.AccessToken))
+                return new GraphServiceClient(new DelegateAuthenticationProvider(requestMessage =>
+                {
+                    requestMessage.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", authResult.AccessToken);
+                    return Task.FromResult(0);
+                }));
+            
+            return null;
+        }
+        
+        private APIGatewayCustomAuthorizerResponse GenerateUnauthorizedResponse()
+        {
+            return new APIGatewayCustomAuthorizerResponse
+            {
+                PrincipalID = null,
+                PolicyDocument = new APIGatewayCustomAuthorizerPolicy
+                {
+                    Version = "2012-10-17",
+                    Statement = new List<APIGatewayCustomAuthorizerPolicy.IAMPolicyStatement>
+                    {
+                        new APIGatewayCustomAuthorizerPolicy.IAMPolicyStatement
+                        {
+                            Action = new HashSet<string> { "execute-api:Invoke" },
+                            Effect = "Deny",
+                            Resource = new HashSet<string> { "*" }
+                        }
+                    }
+                },
+                Context = null
+            };
+        }
+    }
+}
